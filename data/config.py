@@ -16,7 +16,7 @@ FLOATS_COLLECTION = "floats"
 # ─── Data Paths ──────────────────────────────────────────────────────────────
 BASE_DATA_DIR = os.environ.get(
     "ARGO_DATA_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "incois_data")
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "incois_data")
 )
 
 # ─── Ingestion Tuning ────────────────────────────────────────────────────────
