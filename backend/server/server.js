@@ -11,6 +11,7 @@ const McpService = require("./services/mcpService");
 const RagService = require("./services/ragService");
 const createRoutes = require("./routes/chatRoutes");
 
+
 // ─── Logger Utility ───────────────────────────────────────────────────────────
 
 const logger = {
@@ -33,35 +34,31 @@ app.use(express.json({ limit: "10mb" }));
 
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017";
 const DB_NAME = process.env.DATABASE_NAME || "floatchat_ai";
-const LLM_URL = process.env.LLM_API_URL || "http://localhost:11434/api";
-const LLM_MODEL = process.env.LLM_MODEL || "llama3.1:8b";
+const LLM_API_KEY = process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "";
+const LLM_MODEL = process.env.LLM_MODEL || "qwen/qwen3.5-397b-a17b";
+const LLM_BASE_URL = process.env.LLM_BASE_URL || "https://openrouter.ai/api/v1";
+const CHROMA_PERSIST_DIR = process.env.CHROMA_PERSIST_DIR
+  ? path.resolve(__dirname, process.env.CHROMA_PERSIST_DIR)
+  : path.resolve(__dirname, "../../chroma_data");
 const PORT = parseInt(process.env.PORT || "3001", 10);
-
-// Python binary — use the project's virtual environment on Windows
-const PYTHON_BIN =
-  process.platform === "win32"
-    ? path.join(__dirname, "../.venv/Scripts/python.exe")
-    : path.join(__dirname, "../.venv/bin/python");
 
 logger.info("Starting FloatChat-AI Server", {
   port: PORT,
   mongo: MONGO_URI,
-  llm: LLM_URL,
-  model: LLM_MODEL,
+  llmModel: LLM_MODEL,
+  llmBaseUrl: LLM_BASE_URL,
+  llmKeySet: !!LLM_API_KEY && !LLM_API_KEY.includes("your-"),
 });
 
 // ─── Service Instances ────────────────────────────────────────────────────────
 
 const mongoService = new MongoService(MONGO_URI, DB_NAME);
-const vectorService = new VectorService(PYTHON_BIN);
-const mcpService = new McpService(
-  mongoService,
-  PYTHON_BIN,
-  path.resolve(__dirname, ".."),
-);
+const vectorService = new VectorService(CHROMA_PERSIST_DIR);
+const mcpService = new McpService(mongoService);
 const ragService = new RagService(vectorService, mongoService, mcpService, {
-  llmApiUrl: LLM_URL,
+  llmApiKey: LLM_API_KEY,
   llmModel: LLM_MODEL,
+  llmBaseUrl: LLM_BASE_URL,
 });
 
 // ─── Chat Session Routes (required by ChatGPTInterface.js) ───────────────────
@@ -359,7 +356,7 @@ async function start() {
         port: PORT,
       });
       console.log(`\n   MongoDB:  ${MONGO_URI} / ${DB_NAME}`);
-      console.log(`   LLM:      ${LLM_URL} (${LLM_MODEL})`);
+      console.log(`   LLM:      ${LLM_MODEL} (via ${LLM_BASE_URL})`);
       console.log(`   Health:   http://localhost:${PORT}/health`);
       console.log(`   API Docs: See routes/ and services/\n`);
     });

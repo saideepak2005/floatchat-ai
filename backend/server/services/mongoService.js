@@ -3,464 +3,487 @@
 const { MongoClient, ObjectId } = require('mongodb');
 
 /**
- * MongoService — Full implementation for FloatChat-AI backend.
- * Collections (matching ingestion.py):
- *   floats        — one doc per unique platform_number
- *   profiles      — core ARGO profiles
- *   bgc_profiles  — BGC ARGO profiles
+ * MongoService — Complete MongoDB data layer for FloatChat-AI.
+ *
+ * Collections:
+ *   profiles      — 87K+ ARGO core profiles with measurements[]
+ *   bgc_profiles  — 13K+ BGC profiles
+ *   floats        — 567 aggregated float summaries
+ *   chat_sessions — user chat sessions
+ *   chat_messages — messages within sessions
+ *   users         — user accounts
  */
 class MongoService {
   constructor(uri, dbName) {
     this.uri = uri;
     this.dbName = dbName;
-    this.client = new MongoClient(uri);
+    this.client = null;
     this.db = null;
   }
 
+  // ─── Connection ──────────────────────────────────────────────────────
+
   async connect() {
     if (this.db) return;
+    this.client = new MongoClient(this.uri);
     await this.client.connect();
     this.db = this.client.db(this.dbName);
     console.log(`✅ MongoDB connected: ${this.dbName}`);
   }
 
-  _profiles()    { return this.db.collection('profiles'); }
-  _bgc()         { return this.db.collection('bgc_profiles'); }
-  _floats()      { return this.db.collection('floats'); }
-  _sessions()    { return this.db.collection('chat_sessions'); }
-  _messages()    { return this.db.collection('chat_messages'); }
-
-  // ─── Floats ───────────────────────────────────────────────────────────────
-
-  /**
-   * List all floats summary (one doc per platform).
-   * Fields: platform_number, total_cycles, has_bgc, first_date, last_date,
-   *         geo_bounding_box, project_name, pi_name, data_centre
-   */
-  async getAllFloats(limit = 500) {
-    const docs = await this._floats()
-      .find({})
-      .project({
-        platform_number: 1,
-        project_name: 1,
-        pi_name: 1,
-        platform_type: 1,
-        data_centre: 1,
-        total_cycles: 1,
-        has_bgc: 1,
-        bgc_parameters: 1,
-        first_date: 1,
-        last_date: 1,
-        geo_bounding_box: 1,
-        data_modes_used: 1,
-      })
-      .limit(limit)
-      .toArray();
-    return docs;
-  }
-
-  /** Single float metadata by platform number. */
-  async getFloat(platformNumber) {
-    return this._floats().findOne({ platform_number: String(platformNumber) });
-  }
-
-  // ─── Query Float (legacy / MCP tool: query_float) ─────────────────────────
-
-  async queryFloat(platform, cycle = null) {
-    const query = { platform_number: String(platform) };
-    if (cycle !== null) query.cycle_number = Number(cycle);
-    return this._profiles().find(query).limit(10).toArray();
-  }
-
-  // ─── Profile Queries ──────────────────────────────────────────────────────
-
-  /** Single profile by MongoDB _id. */
-  async getProfile(id) {
-    try {
-      return await this._profiles().findOne({ _id: id });
-    } catch (e) {
-      return null;
+  async close() {
+    if (this.client) {
+      await this.client.close();
+      this.client = null;
+      this.db = null;
     }
   }
 
-  /**
-   * Nearest floats to a lat/lon point within radius_km.
-   * Uses 2dsphere index on geo_location (set by ingestion.py).
-   */
-  async nearestFloats(lat, lon, radius_km = 100, limit = 20) {
-    const radiusRadians = radius_km / 6371; // Earth radius km
-    const docs = await this._profiles()
-      .find({
-        geo_location: {
-          $geoWithin: {
-            $centerSphere: [[lon, lat], radiusRadians],
-          },
-        },
-      })
-      .project({
-        platform_number: 1, cycle_number: 1,
-        latitude: 1, longitude: 1,
-        timestamp: 1, max_pres: 1,
-      })
-      .limit(limit)
-      .toArray();
-    return docs;
-  }
+  // ─── Chat Sessions ──────────────────────────────────────────────────
 
-  /**
-   * Profiles in a date range, optionally within a bounding box.
-   * @param {string} startDate ISO date string
-   * @param {string} endDate   ISO date string
-   * @param {object|null} bbox { lat_min, lat_max, lon_min, lon_max }
-   */
-  async profilesByDate(startDate, endDate, bbox = null, limit = 50) {
-    let end = new Date(endDate);
-    // If the endDate is exactly midnight (meaning no time was specified), stretch it to 23:59:59 to include the whole day
-    if (end.getUTCHours() === 0 && end.getUTCMinutes() === 0 && end.getUTCSeconds() === 0) {
-      end.setUTCHours(23, 59, 59, 999);
-    }
-
-    const q = {
-      timestamp: {
-        $gte: new Date(startDate).toISOString(),
-        $lte: end.toISOString(),
-      }
-    };
-    if (bbox && bbox.lat_min !== undefined && bbox.lat_max !== undefined) {
-      q.latitude  = { $gte: bbox.lat_min, $lte: bbox.lat_max };
-      q.longitude = { $gte: bbox.lon_min, $lte: bbox.lon_max };
-    }
-    return this._profiles()
-      .find(q)
-      .project({ platform_number: 1, cycle_number: 1, latitude: 1, longitude: 1, timestamp: 1, max_pres: 1, measurements: 1 })
-      .limit(limit)
-      .toArray();
-  }
-  /**
-   * Profiles within a geographic bounding box.
-   */
-  async profilesByRegion(lat_min, lat_max, lon_min, lon_max, limit = 200) {
-    const docs = await this._profiles()
-      .find({
-        latitude:  { $gte: lat_min, $lte: lat_max },
-        longitude: { $gte: lon_min, $lte: lon_max },
-      })
-      .project({ platform_number: 1, cycle_number: 1, latitude: 1, longitude: 1, timestamp: 1, max_pres: 1 })
-      .limit(limit)
-      .toArray();
-    return docs;
-  }
-
-  // ─── Visualization Queries ────────────────────────────────────────────────
-
-  /** Float trajectory — lat/lon/timestamp per cycle, sorted ascending. */
-  async getTrajectory(platformNumber) {
-    return this._profiles()
-      .find({ platform_number: String(platformNumber) })
-      .project({ cycle_number: 1, latitude: 1, longitude: 1, timestamp: 1 })
-      .sort({ cycle_number: 1 })
-      .toArray();
-  }
-
-  /**
-   * Profile measurements for Plotly traces.
-   * Returns array of { platform_number, cycle_number, latitude, longitude, timestamp, data: [{pres, value}] }
-   * param: field name in measurements array e.g. 'PSAL', 'TEMP'
-   */
-  async getProfileMeasurements(platforms, param = 'PSAL') {
-    const paramKey = param.toUpperCase();
-    const presKey  = 'PRES';
-
-    const docs = await this._profiles()
-      .find({ platform_number: { $in: platforms.map(String) } })
-      .project({
-        platform_number: 1, cycle_number: 1,
-        latitude: 1, longitude: 1, timestamp: 1,
-        [`measurements.${paramKey}`]: 1,
-        [`measurements.${presKey}`]: 1,
-      })
-      .limit(50)
-      .toArray();
-
-    return docs.map(doc => {
-      const presArr  = (doc.measurements && doc.measurements[presKey])  || [];
-      const valArr   = (doc.measurements && doc.measurements[paramKey]) || [];
-      const data = presArr.map((p, i) => ({ pres: p, value: valArr[i] }))
-        .filter(d => d.pres != null && d.value != null);
-      return {
-        profile_id: doc._id,
-        platform_number: doc.platform_number,
-        cycle_number: doc.cycle_number,
-        latitude: doc.latitude,
-        longitude: doc.longitude,
-        timestamp: doc.timestamp,
-        data,
-      };
-    });
-  }
-
-  /**
-   * Depth-time data for a single float.
-   * Returns array of { cycle, timestamp, data: [{pres, value}] }
-   */
-  async getDepthTimeData(platformNumber, param = 'TEMP') {
-    const paramKey = param.toUpperCase();
-    const presKey  = 'PRES';
-
-    const docs = await this._profiles()
-      .find({ platform_number: String(platformNumber) })
-      .project({
-        cycle_number: 1, timestamp: 1,
-        [`measurements.${paramKey}`]: 1,
-        [`measurements.${presKey}`]: 1,
-      })
-      .sort({ cycle_number: 1 })
-      .toArray();
-
-    return docs.map(doc => {
-      const presArr = (doc.measurements && doc.measurements[presKey])  || [];
-      const valArr  = (doc.measurements && doc.measurements[paramKey]) || [];
-      const data = presArr.map((p, i) => ({ pres: p, value: valArr[i] }))
-        .filter(d => d.pres != null && d.value != null);
-      return { cycle: doc.cycle_number, timestamp: doc.timestamp, data };
-    });
-  }
-
-  // ─── Analytics ────────────────────────────────────────────────────────────
-
-  /**
-   * Compute mean/std/min/max for a parameter across a list of profile _ids.
-   */
-  async parameterStats(profileIds, param = 'PSAL') {
-    const paramKey = param.toUpperCase();
-    const docs = await this._profiles()
-      .find({ _id: { $in: profileIds } })
-      .project({ [`measurements.${paramKey}`]: 1 })
-      .toArray();
-
-    const values = [];
-    for (const doc of docs) {
-      const arr = (doc.measurements && doc.measurements[paramKey]) || [];
-      for (const v of arr) { if (v != null) values.push(v); }
-    }
-
-    if (values.length === 0) return { count: 0, mean: null, std: null, min: null, max: null };
-
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    const variance = values.reduce((a, b) => a + (b - mean) ** 2, 0) / values.length;
-    return {
-      count: values.length,
-      mean: +mean.toFixed(4),
-      std:  +(Math.sqrt(variance)).toFixed(4),
-      min:  +Math.min(...values).toFixed(4),
-      max:  +Math.max(...values).toFixed(4),
-    };
-  }
-
-  /**
-   * Compare two geographic regions for a parameter.
-   * region: { lat_min, lat_max, lon_min, lon_max }
-   */
-  async compareRegions(region1, region2, param = 'PSAL', limit = 100) {
-    const paramKey = param.toUpperCase();
-
-    const fetchIds = async (region) => {
-      const docs = await this._profiles()
-        .find({
-          latitude:  { $gte: region.lat_min, $lte: region.lat_max },
-          longitude: { $gte: region.lon_min, $lte: region.lon_max },
-        })
-        .project({ _id: 1 })
-        .limit(limit)
-        .toArray();
-      return docs.map(d => d._id);
-    };
-
-    const [ids1, ids2] = await Promise.all([fetchIds(region1), fetchIds(region2)]);
-    const [stats1, stats2] = await Promise.all([
-      this.parameterStats(ids1, param),
-      this.parameterStats(ids2, param),
-    ]);
-
-    return {
-      param,
-      region1: { bounds: region1, profile_count: ids1.length, stats: stats1 },
-      region2: { bounds: region2, profile_count: ids2.length, stats: stats2 },
-    };
-  }
-
-  /**
-   * Per-cycle time series statistics for a single float.
-   * cycleRange: [start, end] inclusive or null for all cycles.
-   */
-  async timeSeriesStats(platformNumber, param = 'TEMP', cycleRange = null) {
-    const paramKey = param.toUpperCase();
-    const query = { platform_number: String(platformNumber) };
-    if (cycleRange) {
-      query.cycle_number = { $gte: cycleRange[0], $lte: cycleRange[1] };
-    }
-
-    const docs = await this._profiles()
-      .find(query)
-      .project({
-        cycle_number: 1, timestamp: 1,
-        [`measurements.${paramKey}`]: 1,
-      })
-      .sort({ cycle_number: 1 })
-      .toArray();
-
-    return docs.map(doc => {
-      const arr = (doc.measurements && doc.measurements[paramKey]) || [];
-      const vals = arr.filter(v => v != null);
-      const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-      return {
-        cycle: doc.cycle_number,
-        timestamp: doc.timestamp,
-        count: vals.length,
-        mean: mean != null ? +mean.toFixed(4) : null,
-        min: vals.length ? +Math.min(...vals).toFixed(4) : null,
-        max: vals.length ? +Math.max(...vals).toFixed(4) : null,
-      };
-    });
-  }
-
-  // ─── Export ───────────────────────────────────────────────────────────────
-
-  /**
-   * Export selected profiles to CSV string.
-   * params: array of parameter names e.g. ['PRES','TEMP','PSAL']
-   */
-  async exportCsv(profileIds, params = ['PRES', 'TEMP', 'PSAL']) {
-    const upperParams = params.map(p => p.toUpperCase());
-    const docs = await this._profiles()
-      .find({ _id: { $in: profileIds } })
-      .project({
-        platform_number: 1, cycle_number: 1,
-        latitude: 1, longitude: 1, timestamp: 1,
-        ...Object.fromEntries(upperParams.map(p => [`measurements.${p}`, 1])),
-      })
-      .toArray();
-
-    // Build CSV rows — one row per depth level
-    const header = ['profile_id','platform_number','cycle_number','latitude','longitude','timestamp','level', ...upperParams].join(',');
-    const rows = [header];
-
-    for (const doc of docs) {
-      const presArr = (doc.measurements && doc.measurements['PRES']) || [];
-      const len = presArr.length || 1;
-
-      for (let i = 0; i < len; i++) {
-        const row = [
-          doc._id,
-          doc.platform_number,
-          doc.cycle_number,
-          doc.latitude,
-          doc.longitude,
-          doc.timestamp ? new Date(doc.timestamp).toISOString() : '',
-          i + 1,
-          ...upperParams.map(p => {
-            const arr = (doc.measurements && doc.measurements[p]) || [];
-            const v = arr[i];
-            return v != null ? v : '';
-          }),
-        ];
-        rows.push(row.join(','));
-      }
-    }
-
-    return rows.join('\n');
-  }
-
-  // ─── System Stats ─────────────────────────────────────────────────────────
-
-  /** Returns overall database statistics for the Dashboard. */
-  async getStats() {
-    const [
-      totalFloats,
-      totalProfiles,
-      totalBgc,
-      recentProfiles,
-      bgcFloats,
-    ] = await Promise.all([
-      this._floats().countDocuments({}),
-      this._profiles().countDocuments({}),
-      this._bgc().countDocuments({}),
-      this._profiles().countDocuments({
-        timestamp: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
-      }),
-      this._floats().countDocuments({ has_bgc: true }),
-    ]);
-
-    return {
-      total_floats: totalFloats,
-      total_profiles: totalProfiles,
-      total_bgc_profiles: totalBgc,
-      recent_profiles: recentProfiles,
-      bgc_floats: bgcFloats,
-      // For summary cards
-      activeFloats:    totalFloats,
-      recentProfiles:  recentProfiles,
-      bgcCoverage:     totalFloats > 0 ? `${Math.round((bgcFloats / totalFloats) * 100)}%` : '0%',
-      dataPoints:      `${(totalProfiles + totalBgc).toLocaleString()}`,
-    };
-  }
-
-  // ─── Chat Sessions ─────────────────────────────────────────────────────────
-
-  async createSession(userId, title = 'New Session') {
+  async createSession(userId, title = 'New Chat') {
     const doc = {
       userId,
       title,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
-    const result = await this._sessions().insertOne(doc);
-    return { ...doc, _id: result.insertedId, id: result.insertedId.toString() };
+    const result = await this.db.collection('chat_sessions').insertOne(doc);
+    return { _id: result.insertedId, id: result.insertedId, ...doc };
   }
 
   async getSessions(userId) {
-    return this._sessions()
+    return this.db
+      .collection('chat_sessions')
       .find({ userId })
       .sort({ updatedAt: -1 })
       .limit(50)
       .toArray();
   }
 
+  async getMessages(sessionId) {
+    const oid = this._toObjectId(sessionId);
+    if (!oid) return [];
+    return this.db
+      .collection('chat_messages')
+      .find({ sessionId: oid })
+      .sort({ timestamp: 1 })
+      .toArray();
+  }
+
   async deleteSession(sessionId) {
-    await this._sessions().deleteOne({ _id: new ObjectId(sessionId) });
-    await this._messages().deleteMany({ sessionId });
+    const oid = this._toObjectId(sessionId);
+    if (!oid) return;
+    await Promise.all([
+      this.db.collection('chat_sessions').deleteOne({ _id: oid }),
+      this.db.collection('chat_messages').deleteMany({ sessionId: oid }),
+    ]);
   }
 
   async saveMessage(sessionId, type, content, code = null) {
+    const oid = this._toObjectId(sessionId);
+    if (!oid) return;
     const doc = {
-      sessionId,
+      sessionId: oid,
       type,
       content,
-      code,
       hasCode: !!code,
+      code: code || null,
       timestamp: new Date(),
     };
-    const result = await this._messages().insertOne(doc);
-    // Update session timestamp
-    await this._sessions().updateOne(
-      { _id: new ObjectId(sessionId) },
-      { $set: { updatedAt: new Date() } }
-    );
-    return { ...doc, _id: result.insertedId, id: result.insertedId.toString() };
+    await this.db.collection('chat_messages').insertOne(doc);
+    await this.db
+      .collection('chat_sessions')
+      .updateOne({ _id: oid }, { $set: { updatedAt: new Date() } });
   }
 
-  async getMessages(sessionId, limit = 100) {
-    return this._messages()
-      .find({ sessionId })
-      .sort({ timestamp: 1 })
+  // ─── Float Queries ──────────────────────────────────────────────────
+
+  async getFloat(platformNumber) {
+    return this.db
+      .collection('floats')
+      .findOne({ platform_number: String(platformNumber) });
+  }
+
+  async getAllFloats(limit = 500) {
+    return this.db
+      .collection('floats')
+      .find({})
+      .sort({ platform_number: 1 })
       .limit(limit)
       .toArray();
   }
 
-  // ─── Cleanup ──────────────────────────────────────────────────────────────
+  async queryFloat(platformNumber, cycle = null) {
+    const filter = { platform_number: String(platformNumber) };
+    if (cycle != null) filter.cycle_number = parseInt(cycle);
+    return this.db
+      .collection('profiles')
+      .find(filter, { projection: { measurements: 0 } })
+      .sort({ cycle_number: 1 })
+      .limit(200)
+      .toArray();
+  }
 
-  async close() {
-    await this.client.close();
+  // ─── Geo & Region Queries ───────────────────────────────────────────
+
+  async nearestFloats(lat, lon, radiusKm = 300, limit = 20) {
+    return this.db
+      .collection('profiles')
+      .find({
+        geo_location: {
+          $nearSphere: {
+            $geometry: { type: 'Point', coordinates: [lon, lat] },
+            $maxDistance: radiusKm * 1000,
+          },
+        },
+      })
+      .project({ measurements: 0 })
+      .limit(limit)
+      .toArray();
+  }
+
+  async profilesByRegion(latMin, latMax, lonMin, lonMax, limit = 200) {
+    return this.db
+      .collection('profiles')
+      .find({
+        latitude: { $gte: latMin, $lte: latMax },
+        longitude: { $gte: lonMin, $lte: lonMax },
+      })
+      .project({ measurements: 0 })
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  // ─── Date / Profile Queries ─────────────────────────────────────────
+
+  async profilesByDate(dateStart, dateEnd, bbox = null) {
+    const filter = {
+      timestamp: {
+        $gte: new Date(dateStart),
+        $lte: new Date(dateEnd),
+      },
+    };
+    if (bbox) {
+      if (bbox.lat_min != null) filter.latitude = { $gte: +bbox.lat_min, $lte: +bbox.lat_max };
+      if (bbox.lon_min != null) filter.longitude = { $gte: +bbox.lon_min, $lte: +bbox.lon_max };
+    }
+    return this.db
+      .collection('profiles')
+      .find(filter)
+      .project({ measurements: 0 })
+      .sort({ timestamp: -1 })
+      .limit(500)
+      .toArray();
+  }
+
+  async getProfile(profileId) {
+    return this.db.collection('profiles').findOne({ _id: profileId });
+  }
+
+  // ─── BGC Profile Queries ─────────────────────────────────────────────
+
+  async queryBgcProfiles(platformNumber, cycle = null) {
+    const filter = { platform_number: String(platformNumber) };
+    if (cycle != null) filter.cycle_number = parseInt(cycle);
+    return this.db
+      .collection('bgc_profiles')
+      .find(filter, { projection: { measurements: 0 } })
+      .sort({ cycle_number: 1 })
+      .limit(200)
+      .toArray();
+  }
+
+  async bgcProfilesByRegion(latMin, latMax, lonMin, lonMax, limit = 200) {
+    return this.db
+      .collection('bgc_profiles')
+      .find({
+        latitude: { $gte: latMin, $lte: latMax },
+        longitude: { $gte: lonMin, $lte: lonMax },
+      })
+      .project({ measurements: 0 })
+      .sort({ timestamp: -1 })
+      .limit(limit)
+      .toArray();
+  }
+
+  // ─── Measurements / Trajectory / Depth-Time ─────────────────────────
+
+  /**
+   * Determine which collection to query based on the parameter.
+   * BGC params (DOXY, CHLA, BBP700, NITRATE, PH) are in bgc_profiles.
+   * Core params (TEMP, PSAL, PRES) are in profiles (and also in bgc_profiles).
+   */
+  _isBgcParam(param) {
+    const bgcParams = ['doxy', 'chla', 'bbp700', 'nitrate', 'ph', 'cdom', 'bbp532'];
+    return bgcParams.includes(param.toLowerCase());
+  }
+
+  _getCollection(param) {
+    return this._isBgcParam(param) ? 'bgc_profiles' : 'profiles';
+  }
+
+  async getProfileMeasurements(platformsOrIds, param = 'TEMP') {
+    const platforms = Array.isArray(platformsOrIds) ? platformsOrIds : [platformsOrIds];
+    const paramKey = param.toLowerCase();
+    const collectionName = this._getCollection(param);
+    const results = [];
+
+    for (const pn of platforms) {
+      const profiles = await this.db
+        .collection(collectionName)
+        .find({ platform_number: String(pn) })
+        .sort({ cycle_number: -1 })
+        .limit(10)
+        .toArray();
+
+      for (const p of profiles) {
+        const data = (p.measurements || [])
+          .filter((m) => m[paramKey] != null && m.pres != null)
+          .map((m) => ({ pres: m.pres, value: m[paramKey] }));
+
+        if (data.length > 0) {
+          results.push({
+            profile_id: p._id,
+            platform_number: p.platform_number,
+            cycle_number: p.cycle_number,
+            latitude: p.latitude,
+            longitude: p.longitude,
+            timestamp: p.timestamp,
+            data,
+          });
+        }
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Get paired T-S (temp + salinity) measurements from the same profiles.
+   * Returns data points where BOTH temp and psal exist at the same pressure level.
+   */
+  async getPairedMeasurements(platformsOrIds, params = ['temp', 'psal']) {
+    const platforms = Array.isArray(platformsOrIds) ? platformsOrIds : [platformsOrIds];
+    const results = [];
+
+    for (const pn of platforms) {
+      const profiles = await this.db
+        .collection('profiles')
+        .find({ platform_number: String(pn) })
+        .sort({ cycle_number: -1 })
+        .limit(10)
+        .toArray();
+
+      for (const p of profiles) {
+        const data = (p.measurements || [])
+          .filter((m) => {
+            // All requested params must be present, plus pressure
+            return m.pres != null && params.every(key => m[key] != null);
+          })
+          .map((m) => {
+            const point = { pres: m.pres };
+            for (const key of params) {
+              point[key] = m[key];
+            }
+            return point;
+          });
+
+        if (data.length > 0) {
+          results.push({
+            profile_id: p._id,
+            platform_number: p.platform_number,
+            cycle_number: p.cycle_number,
+            latitude: p.latitude,
+            longitude: p.longitude,
+            timestamp: p.timestamp,
+            data,
+          });
+        }
+      }
+    }
+    return results;
+  }
+
+  async getTrajectory(platformNumber) {
+    return this.db
+      .collection('profiles')
+      .find(
+        { platform_number: String(platformNumber) },
+        { projection: { latitude: 1, longitude: 1, cycle_number: 1, timestamp: 1 } }
+      )
+      .sort({ cycle_number: 1 })
+      .toArray();
+  }
+
+  async getDepthTimeData(platformNumber, param = 'TEMP') {
+    const paramKey = param.toLowerCase();
+    const collectionName = this._getCollection(param);
+    const profiles = await this.db
+      .collection(collectionName)
+      .find({ platform_number: String(platformNumber) })
+      .sort({ cycle_number: 1 })
+      .limit(50)
+      .toArray();
+
+    return profiles
+      .map((p) => {
+        const data = (p.measurements || [])
+          .filter((m) => m[paramKey] != null && m.pres != null)
+          .map((m) => ({ pres: m.pres, value: m[paramKey] }));
+        return {
+          cycle: p.cycle_number,
+          timestamp: p.timestamp,
+          data,
+        };
+      })
+      .filter((d) => d.data.length > 0);
+  }
+
+  // ─── Analytics ──────────────────────────────────────────────────────
+
+  async parameterStats(profileIds, param = 'PSAL') {
+    const paramKey = param.toLowerCase();
+    const collectionName = this._getCollection(param);
+    const ids = Array.isArray(profileIds) ? profileIds : [profileIds];
+    if (ids.length === 0) return { mean: null, std: null, min: null, max: null, count: 0 };
+
+    const pipeline = [
+      { $match: { _id: { $in: ids } } },
+      { $unwind: '$measurements' },
+      { $match: { [`measurements.${paramKey}`]: { $ne: null } } },
+      {
+        $group: {
+          _id: null,
+          mean: { $avg: `$measurements.${paramKey}` },
+          min: { $min: `$measurements.${paramKey}` },
+          max: { $max: `$measurements.${paramKey}` },
+          count: { $sum: 1 },
+          values: { $push: `$measurements.${paramKey}` },
+        },
+      },
+    ];
+
+    const result = await this.db.collection(collectionName).aggregate(pipeline).toArray();
+    if (!result.length) return { mean: null, std: null, min: null, max: null, count: 0 };
+
+    const r = result[0];
+    // Calculate std dev
+    const vals = (r.values || []).filter((v) => v != null);
+    let std = 0;
+    if (vals.length > 1) {
+      const mean = r.mean || 0;
+      const variance = vals.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (vals.length - 1);
+      std = Math.sqrt(variance);
+    }
+
+    return { mean: r.mean, std, min: r.min, max: r.max, count: r.count };
+  }
+
+  async compareRegions(region1, region2, param = 'PSAL', limit = 100) {
+    const fetchRegion = async (r) => {
+      const profiles = await this.profilesByRegion(
+        r.lat_min, r.lat_max, r.lon_min, r.lon_max, limit
+      );
+      const ids = profiles.map((p) => p._id);
+      const stats = await this.parameterStats(ids, param);
+      return { count: profiles.length, stats };
+    };
+
+    const [r1, r2] = await Promise.all([fetchRegion(region1), fetchRegion(region2)]);
+    return { region1: r1, region2: r2 };
+  }
+
+  async timeSeriesStats(platformNumber, param = 'TEMP', cycles = null) {
+    const paramKey = param.toLowerCase();
+    const collectionName = this._getCollection(param);
+    const filter = { platform_number: String(platformNumber) };
+    if (cycles && cycles.length === 2) {
+      filter.cycle_number = { $gte: cycles[0], $lte: cycles[1] };
+    }
+
+    const profiles = await this.db
+      .collection(collectionName)
+      .find(filter)
+      .sort({ cycle_number: 1 })
+      .limit(200)
+      .toArray();
+
+    return profiles.map((p) => {
+      const vals = (p.measurements || [])
+        .map((m) => m[paramKey])
+        .filter((v) => v != null);
+      const mean = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      const min = vals.length ? Math.min(...vals) : null;
+      const max = vals.length ? Math.max(...vals) : null;
+
+      return {
+        cycle: p.cycle_number,
+        timestamp: p.timestamp,
+        mean,
+        min,
+        max,
+        count: vals.length,
+      };
+    });
+  }
+
+  async getStats() {
+    const [profileCount, floatCount, bgcCount] = await Promise.all([
+      this.db.collection('profiles').countDocuments(),
+      this.db.collection('floats').countDocuments(),
+      this.db.collection('bgc_profiles').countDocuments(),
+    ]);
+
+    // BGC coverage
+    const bgcFloats = await this.db.collection('floats').countDocuments({ has_bgc: true });
+
+    return {
+      total_profiles: profileCount,
+      activeFloats: floatCount,
+      total_bgc_profiles: bgcCount,
+      bgcCoverage: floatCount > 0 ? `${((bgcFloats / floatCount) * 100).toFixed(1)}%` : '0%',
+    };
+  }
+
+  // ─── Export ─────────────────────────────────────────────────────────
+
+  async exportCsv(profileIds, params = ['PRES', 'TEMP', 'PSAL']) {
+    const ids = Array.isArray(profileIds) ? profileIds : [profileIds];
+    const profiles = await this.db
+      .collection('profiles')
+      .find({ _id: { $in: ids } })
+      .toArray();
+
+    const header = ['profile_id', 'platform_number', 'cycle', 'lat', 'lon', 'timestamp', ...params];
+    const lines = [header.join(',')];
+
+    for (const p of profiles) {
+      for (const m of p.measurements || []) {
+        const row = [
+          p._id,
+          p.platform_number,
+          p.cycle_number,
+          p.latitude?.toFixed(4),
+          p.longitude?.toFixed(4),
+          p.timestamp ? new Date(p.timestamp).toISOString() : '',
+          ...params.map((k) => m[k.toLowerCase()] ?? ''),
+        ];
+        lines.push(row.join(','));
+      }
+    }
+    return lines.join('\n');
+  }
+
+  // ─── Helpers ────────────────────────────────────────────────────────
+
+  _toObjectId(id) {
+    if (!id) return null;
+    try {
+      return ObjectId.isValid(id) ? new ObjectId(id) : id;
+    } catch {
+      return id;
+    }
   }
 }
 
