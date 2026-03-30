@@ -8,12 +8,13 @@ const ChatInput = ({ onSendMessage, isTyping, disabled }) => {
   const textareaRef = useRef(null);
 
   useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
       const recog = new SpeechRecognition();
       recog.continuous = false;
       recog.interimResults = true;
-      recog.lang = 'en-US';
+      recog.lang = "en-US";
 
       recog.onresult = (event) => {
         let currentTranscript = "";
@@ -66,7 +67,9 @@ const ChatInput = ({ onSendMessage, isTyping, disabled }) => {
 
   const toggleRecording = () => {
     if (!recognition) {
-      alert("Voice recognition is not supported in this browser. Please use Google Chrome or Microsoft Edge.");
+      alert(
+        "Voice recognition is not supported in this browser. Please use Google Chrome or Microsoft Edge.",
+      );
       return;
     }
 
@@ -83,7 +86,10 @@ const ChatInput = ({ onSendMessage, isTyping, disabled }) => {
   return (
     <div className="bg-slate-900 border-t border-slate-700/50 p-4 relative z-20">
       {/* Input Form */}
-      <form onSubmit={handleSubmit} className="flex items-end space-x-3 max-w-5xl mx-auto">
+      <form
+        onSubmit={handleSubmit}
+        className="flex items-end space-x-3 max-w-5xl mx-auto"
+      >
         {/* Text Input */}
         <div className="flex-1 relative">
           <textarea
@@ -150,8 +156,12 @@ const ChatInput = ({ onSendMessage, isTyping, disabled }) => {
           <span>[Shift+Enter] for new line</span>
         </div>
         <div className="flex items-center space-x-2 font-mono">
-          <span className="text-cyan-400 tracking-wide">{isRecording ? "LISTENING..." : "VOICE UPLINK STANDBY"}</span>
-          <div className={`w-2 h-2 rounded-full ${isRecording ? "bg-red-500 animate-ping" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"}`}></div>
+          <span className="text-cyan-400 tracking-wide">
+            {isRecording ? "LISTENING..." : "VOICE UPLINK STANDBY"}
+          </span>
+          <div
+            className={`w-2 h-2 rounded-full ${isRecording ? "bg-red-500 animate-ping" : "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"}`}
+          ></div>
         </div>
       </div>
     </div>
