@@ -178,7 +178,7 @@ function makeToken(userId) {
 app.post("/api/auth/signup", async (req, res) => {
   try {
     await mongoService.connect();
-    const { email, password, name, role = "researcher" } = req.body;
+    const { email, password, name } = req.body;
     if (!email || !password) {
       logger.warn("Signup: missing credentials", { email });
       return res.status(400).json({ error: "email and password required" });
@@ -197,7 +197,7 @@ app.post("/api/auth/signup", async (req, res) => {
     const doc = {
       email: email.toLowerCase(),
       name: name || email.split("@")[0],
-      role,
+      role: "researcher",
       passwordHash: hash,
       token,
       createdAt: new Date(),

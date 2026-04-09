@@ -35,7 +35,7 @@ function App() {
           <Route 
             path="/chat" 
             element={
-              <ProtectedRoute requireAuth={true} requiredRoles={["researcher", "admin"]}>
+              <ProtectedRoute requireAuth={true} requiredRoles={["researcher"]}>
                 <AppContent />
               </ProtectedRoute>
             } 

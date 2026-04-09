@@ -406,46 +406,6 @@ const Login = () => {
             </motion.button>
           </form>
 
-          {/* Demo Credentials */}
-          <div
-            style={{
-              marginTop: "24px",
-              padding: "16px",
-              background: "#f0fdfa",
-              border: "1px solid #ccfbf1",
-              borderRadius: "8px",
-            }}
-          >
-            <h3
-              style={{
-                fontSize: "12px",
-                fontWeight: 600,
-                color: "#0d9488",
-                marginBottom: "8px",
-                textTransform: "uppercase",
-                letterSpacing: "0.5px",
-              }}
-            >
-              Demo Credentials
-            </h3>
-            <div
-              style={{
-                fontSize: "13px",
-                color: "#475569",
-                display: "flex",
-                flexDirection: "column",
-                gap: "4px",
-              }}
-            >
-              <p>
-                <strong>Email:</strong> researcher@argo.com
-              </p>
-              <p>
-                <strong>Password:</strong> password
-              </p>
-            </div>
-          </div>
-
           <div
             style={{
               marginTop: "24px",

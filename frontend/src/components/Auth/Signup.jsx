@@ -9,9 +9,6 @@ import {
   EyeOff,
   User,
   UserPlus,
-  Shield,
-  GraduationCap,
-  Network,
 } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -21,7 +18,6 @@ const Signup = () => {
     email: "",
     password: "",
     confirmPassword: "",
-    role: "researcher",
   });
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -45,12 +41,7 @@ const Signup = () => {
 
     setLoading(true);
     try {
-      await signup(
-        formData.email,
-        formData.password,
-        formData.name,
-        formData.role,
-      );
+      await signup(formData.email, formData.password, formData.name);
       navigate("/dashboard");
     } catch (err) {
       setError(err.message);
@@ -353,123 +344,28 @@ const Signup = () => {
               </div>
             </div>
 
-            {/* Role Selection */}
-            <div>
-              <label
+            <div
+              style={{
+                padding: "14px 16px",
+                borderRadius: "12px",
+                border: "1px solid #ccfbf1",
+                background: "#f0fdfa",
+              }}
+            >
+              <p
                 style={{
-                  display: "block",
-                  fontSize: "12px",
+                  fontSize: "13px",
                   fontWeight: 600,
-                  color: "#475569",
-                  marginBottom: "12px",
+                  color: "#0f766e",
+                  marginBottom: "4px",
                 }}
               >
-                Role
-              </label>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "12px",
-                }}
-              >
-                <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    cursor: "pointer",
-                    padding: "12px",
-                    borderRadius: "8px",
-                    border: `2px solid ${formData.role === "researcher" ? "#14b8a6" : "#e2e8f0"}`,
-                    background:
-                      formData.role === "researcher" ? "#f0fdfa" : "white",
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (formData.role !== "researcher") {
-                      e.currentTarget.style.borderColor = "#ccfbf1";
-                      e.currentTarget.style.background = "#f0fdfa";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (formData.role !== "researcher") {
-                      e.currentTarget.style.borderColor = "#e2e8f0";
-                      e.currentTarget.style.background = "white";
-                    }
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="role"
-                    value="researcher"
-                    checked={formData.role === "researcher"}
-                    onChange={handleChange}
-                    style={{ cursor: "pointer", marginRight: "8px" }}
-                  />
-                  <div>
-                    <div
-                      style={{
-                        fontSize: "14px",
-                        fontWeight: 600,
-                        color: "#0f172a",
-                      }}
-                    >
-                      Researcher
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>
-                      Full data access
-                    </div>
-                  </div>
-                </label>
-
-                <label
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    cursor: "pointer",
-                    padding: "12px",
-                    borderRadius: "8px",
-                    border: `2px solid ${formData.role === "admin" ? "#0284c7" : "#e2e8f0"}`,
-                    background: formData.role === "admin" ? "#f0f9ff" : "white",
-                    transition: "all 0.2s",
-                  }}
-                  onMouseEnter={(e) => {
-                    if (formData.role !== "admin") {
-                      e.currentTarget.style.borderColor = "#bae6fd";
-                      e.currentTarget.style.background = "#f0f9ff";
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (formData.role !== "admin") {
-                      e.currentTarget.style.borderColor = "#e2e8f0";
-                      e.currentTarget.style.background = "white";
-                    }
-                  }}
-                >
-                  <input
-                    type="radio"
-                    name="role"
-                    value="admin"
-                    checked={formData.role === "admin"}
-                    onChange={handleChange}
-                    style={{ cursor: "pointer", marginRight: "8px" }}
-                  />
-                  <div>
-                    <div
-                      style={{
-                        fontSize: "14px",
-                        fontWeight: 600,
-                        color: "#0f172a",
-                      }}
-                    >
-                      Admin
-                    </div>
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>
-                      Administrative access
-                    </div>
-                  </div>
-                </label>
-              </div>
+                Researcher Access
+              </p>
+              <p style={{ fontSize: "13px", color: "#475569" }}>
+                New accounts are created with researcher access for data
+                exploration and FloatChat AI.
+              </p>
             </div>
 
             {/* Password Fields */}

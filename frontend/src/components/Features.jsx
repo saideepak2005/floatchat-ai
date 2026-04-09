@@ -51,8 +51,8 @@ const features = [
   },
   {
     icon: Globe2,
-    title: "Global Coverage",
-    desc: "Access data from thousands of ARGO floats across all ocean basins worldwide.",
+    title: "Indian Ocean Focus",
+    desc: "Access data from thousands of ARGO floats across the Indian Ocean basins.",
     iconBg: "#f0f9ff",
     iconColor: "#0ea5e9",
     borderColor: "#e0f2fe",

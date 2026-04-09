@@ -40,7 +40,7 @@ const AppContent = () => {
         isMobileMenuOpen={isMobileMenuOpen}
         setIsMobileMenuOpen={setIsMobileMenuOpen}
       />
-      <main className="pt-16">
+      <main className="pt-[72px]">
         <ErrorBoundary>
           <AnimatePresence mode="wait">
             {renderActiveComponent()}

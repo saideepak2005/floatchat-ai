@@ -16,14 +16,16 @@
  *   "text"            → plain text response
  *   "export_csv"      → downloadable CSV
  *
- * TOOL REGISTRY (20+ tools):
+ * TOOL REGISTRY:
  * ── Data Retrieval ─────────────────────────────────────────
- *   query_float, nearest_floats, get_nearest_floats,
- *   profiles_by_date, search_profiles, profiles_by_region,
- *   search_bgc_profiles, get_float_info, get_profile_data,
- *   aggregate_statistics, get_dataset_metadata
+ *   nearest_floats, search_profiles, profiles_by_region,
+ *   search_bgc_profiles, get_float_profiles, get_profile_data,
+ *   aggregate_statistics, get_dataset_metadata, get_recent_profiles
  * ── Analytics ──────────────────────────────────────────────
- *   parameter_stats, compare_regions, time_series_stats
+ *   parameter_stats, compare_regions, time_series_stats,
+ *   get_profile_summary_stats, find_anomalous_profiles,
+ *   find_profiles_by_depth_range, find_profiles_missing_data,
+ *   get_vertical_gradient
  * ── Visualization ──────────────────────────────────────────
  *   visualize_ts_diagram, visualize_depth_profile,
  *   visualize_time_series, visualize_trajectory,
@@ -48,14 +50,7 @@ class McpService {
         // DATA RETRIEVAL TOOLS
         // ═══════════════════════════════════════════
 
-        case 'query_float':
-          return {
-            tool: toolName, type: 'data',
-            data: await this.mongo.queryFloat(params.platform, params.cycle || null),
-          };
-
         case 'nearest_floats':
-        case 'get_nearest_floats':
           return {
             tool: toolName, type: 'data',
             data: await this.mongo.nearestFloats(
@@ -63,7 +58,6 @@ class McpService {
               +(params.radius_km || 300), +(params.limit || 20)),
           };
 
-        case 'profiles_by_date':
         case 'search_profiles':
           return {
             tool: toolName,
@@ -89,12 +83,6 @@ class McpService {
               +(params.limit || 100)),
           };
 
-        case 'get_float_info':
-          return {
-            tool: toolName, type: 'data',
-            data: await this.mongo.getFloat(params.platform),
-          };
-
         case 'get_profile_data':
           return {
             tool: toolName, type: 'data',
@@ -109,7 +97,6 @@ class McpService {
           };
 
         case 'get_float_profiles': {
-          // Alias for query_float — returns all profiles for a float
           return {
             tool: toolName, type: 'data',
             data: await this.mongo.queryFloat(params.platform, params.cycle || null),
@@ -329,16 +316,14 @@ class McpService {
           };
         }
 
-        case 'visualize_depth_profile':
-        case 'plot_profiles':
-        case 'compare_profiles_depth':
-        case 'visualize_profile_depth_plot': {
-          const param = (params.param || 'TEMP').toUpperCase();
+        case 'visualize_depth_profile': {
+          const requestedParams = Array.isArray(params.params) && params.params.length
+            ? [...new Set(params.params.map((param) => String(param).toUpperCase()))]
+            : [(params.param || 'TEMP').toUpperCase()];
           const platforms = Array.isArray(params.platforms)
             ? params.platforms
             : (params.platform ? [params.platform] : []);
           const profiles = platforms.length ? platforms : await this._resolveProfiles(params);
-          const data = await this.mongo.getProfileMeasurements(profiles, param);
 
           const axisLabel = {
             TEMP: 'Temperature (°C)', PSAL: 'Salinity (PSU)',
@@ -346,31 +331,82 @@ class McpService {
             CHLA: 'Chlorophyll-a (mg/m³)', NITRATE: 'Nitrate (µmol/kg)',
           };
 
-          const traces = data.map(p => ({
-            x: p.data.map(d => d.value),
-            y: p.data.map(d => -(d.pres || 0)),
-            mode: 'lines+markers', type: 'scatter',
-            name: `${p.platform_number} C${p.cycle_number}`,
-            line: { width: 2 }, marker: { size: 4 },
-          })).filter(t => t.x.length > 0);
+          const dataByParam = await Promise.all(
+            requestedParams.map(async (param) => ({
+              param,
+              profiles: await this.mongo.getProfileMeasurements(profiles, param),
+            })),
+          );
+
+          const colors = ['#0ea5e9', '#f97316', '#10b981', '#a855f7', '#ef4444', '#ef4444'];
+          const traces = [];
+          const multiParam = requestedParams.length > 1;
+
+          dataByParam.forEach(({ param, profiles: paramProfiles }, paramIndex) => {
+            const axisSuffix = multiParam ? (paramIndex === 0 ? '' : String(paramIndex + 1)) : '';
+            paramProfiles.forEach((profile, profileIndex) => {
+              const color = colors[profileIndex % colors.length];
+              traces.push({
+                x: profile.data.map((point) => point.value),
+                y: profile.data.map((point) => -(point.pres || 0)),
+                mode: 'lines+markers',
+                type: 'scatter',
+                name: multiParam
+                  ? `${param} — ${profile.platform_number} C${profile.cycle_number}`
+                  : `${profile.platform_number} C${profile.cycle_number}`,
+                line: { width: 2, color },
+                marker: { size: 4, color },
+                xaxis: `x${axisSuffix}`,
+                yaxis: `y${axisSuffix}`,
+              });
+            });
+          });
+
+          if (!traces.length) {
+            return { tool: toolName, type: 'data', data: [] };
+          }
+
+          const layout = {
+            title: {
+              text: multiParam
+                ? `${requestedParams.join(', ')} Depth Profiles`
+                : `${requestedParams[0]} Depth Profile`,
+              font: { size: 14 },
+            },
+            legend: { orientation: 'h', y: -0.2 },
+            hovermode: 'closest',
+          };
+
+          if (multiParam) {
+            const width = 1 / requestedParams.length;
+            requestedParams.forEach((param, index) => {
+              const axisSuffix = index === 0 ? '' : String(index + 1);
+              layout[`xaxis${axisSuffix}`] = {
+                domain: [index * width + 0.02, (index + 1) * width - 0.02],
+                title: axisLabel[param] || param,
+              };
+              layout[`yaxis${axisSuffix}`] = {
+                title: index === 0 ? 'Depth (m)' : '',
+                autorange: true,
+                matches: index === 0 ? undefined : 'y',
+                showticklabels: index === 0,
+              };
+            });
+          } else {
+            layout.xaxis = { title: axisLabel[requestedParams[0]] || requestedParams[0] };
+            layout.yaxis = { title: 'Depth (m)', autorange: true };
+          }
 
           return {
             tool: toolName, type: 'plotly',
             plotly: {
               data: traces,
-              layout: {
-                title: { text: `${param} Depth Profile`, font: { size: 14 } },
-                xaxis: { title: axisLabel[param] || param },
-                yaxis: { title: 'Depth (m)', autorange: true },
-                legend: { orientation: 'h', y: -0.25 },
-                hovermode: 'closest',
-              },
+              layout,
             },
           };
         }
 
-        case 'visualize_profiles_by_date':
-        case 'plot_profiles_by_date': {
+        case 'visualize_profiles_by_date': {
           const param = (params.param || 'TEMP').toUpperCase();
           const collectionName = this.mongo._getCollection(param);
           const profiles = await this.mongo.profilesByDate(
@@ -439,8 +475,7 @@ class McpService {
           };
         }
 
-        case 'visualize_time_series':
-        case 'depth_time_plot': {
+        case 'visualize_time_series': {
           const param = (params.param || 'TEMP').toUpperCase();
           const series = await this.mongo.timeSeriesStats(
             params.platform, param, params.cycles || null);
@@ -471,9 +506,7 @@ class McpService {
           };
         }
 
-        case 'visualize_trajectory':
-        case 'trajectory_map':
-        case 'visualize_float_trajectory': {
+        case 'visualize_trajectory': {
           const points = await this.mongo.getTrajectory(params.platform);
           return {
             tool: toolName, type: 'leaflet',
@@ -489,8 +522,7 @@ class McpService {
           };
         }
 
-        case 'visualize_float_map':
-        case 'map_marker_display': {
+        case 'visualize_float_map': {
           const mapProfiles = await this.mongo.profilesByRegion(
             +(params.lat_min || -60), +(params.lat_max || 30),
             +(params.lon_min || 20), +(params.lon_max || 120),
@@ -750,20 +782,6 @@ class McpService {
       {
         type: 'function',
         function: {
-          name: 'get_float_info',
-          description: 'Get all technical metadata, cycles, BGC capabilities, date range, and location bounds for a specific ARGO float. Use when user asks about a float by its platform number or ID. Also use for "how many profiles does float X have".',
-          parameters: {
-            type: 'object',
-            properties: {
-              platform: { type: 'string', description: 'The 7-digit platform number / float ID (e.g. "2902277", "1900121")' },
-            },
-            required: ['platform'],
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
           name: 'get_float_profiles',
           description: 'Retrieve all profile records (cycles) for a specific float platform. Returns metadata like lat, lon, timestamp, cycle for each profile. Use for "list profiles for float X", "list all profile IDs for float X".',
           parameters: {
@@ -995,7 +1013,7 @@ class McpService {
         type: 'function',
         function: {
           name: 'visualize_depth_profile',
-          description: 'Generate a depth profile chart showing a parameter vs depth/pressure. Use for "temperature profile", "plot the temperature depth profile", "salinity at depth", "DOXY depth plot", "create a depth plot showing both temperature and salinity", or any parameter vs depth visualization.',
+          description: 'Generate a depth profile chart showing one or more parameters vs depth/pressure. Use for "temperature profile", "plot the temperature depth profile", "salinity at depth", "DOXY depth plot", "create a depth plot showing both temperature and salinity", or any parameter vs depth visualization.',
           parameters: {
             type: 'object',
             properties: {
@@ -1005,6 +1023,14 @@ class McpService {
                 type: 'string',
                 enum: ['TEMP', 'PSAL', 'DOXY', 'CHLA', 'NITRATE', 'PRES'],
                 description: 'Parameter to plot (default: TEMP)',
+              },
+              params: {
+                type: 'array',
+                items: {
+                  type: 'string',
+                  enum: ['TEMP', 'PSAL', 'DOXY', 'CHLA', 'NITRATE', 'PRES'],
+                },
+                description: 'Optional list of parameters to plot together, such as ["TEMP", "PSAL", "PRES"]',
               },
             },
           },

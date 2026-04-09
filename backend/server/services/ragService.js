@@ -283,7 +283,8 @@ SPECIFIC TOOL ROUTING:
 - "show on map" / "map of floats" → visualize_float_map
 - "heatmap" → visualize_heatmap
 - "compare profiles" / "comparison depth chart" → visualize_depth_profile (with multiple platforms)
-- "show data table" / "list floats" → get_data_table
+- "show data table for float X" / "list cycles for float X" → get_float_profiles
+- "show profiles between dates" / "tabular date results" → search_profiles
 
 6. Use the conversation history to maintain context — if user refers to "that float" or "same region", infer from previous messages.
 7. When in doubt about visualization type, use auto_visualize.`,
@@ -356,18 +357,23 @@ SPECIFIC TOOL ROUTING:
       };
     }
 
-    // Platform number extraction
-    const platformMatch = q.match(
-      /(?:float|platform|wmo|id)\s*#?\s*(\d{5,8})|(?:^|\s)(\d{7,8})(?:\s|$)/,
-    );
-    const platform = platformMatch
-      ? platformMatch[1] || platformMatch[2]
-      : null;
+    const platform = this._extractPlatform(q);
+    const cycle = this._extractCycle(q);
     const explicitDateRange = this._extractExplicitDateRange(q);
     const relativeDateRange = this._extractRelativeDateRange(q);
     const dateRange = explicitDateRange || relativeDateRange;
     const region = this._extractRegion(q);
     const bbox = region || undefined;
+    const asksForVisualization =
+      /\b(plot|chart|graph|visuali[sz]e|heatmap|t-?s\s*diagram|time\s*series|track|trajectory|path)\b/i.test(
+        q,
+      );
+    const asksForProfileRecords =
+      platform &&
+      (cycle != null ||
+        /\b(profile\s*data|profile\s*details?|profile\s*record|list\s*profiles?|show\s*profiles?|cycle\s*\d+|cycles?)\b/i.test(
+          q,
+        ));
 
     // Visualization detection
     if (
@@ -382,6 +388,17 @@ SPECIFIC TOOL ROUTING:
         llmReasoning: "",
       };
     }
+    if (asksForProfileRecords && !asksForVisualization) {
+      return {
+        tool: "get_float_profiles",
+        params: {
+          platform,
+          ...(cycle != null ? { cycle } : {}),
+        },
+        llmConnected: false,
+        llmReasoning: "",
+      };
+    }
     if (/\b(t-?s\s*diagram|temperature.*(vs|versus|salinity))\b/i.test(q)) {
       return {
         tool: "visualize_ts_diagram",
@@ -391,10 +408,15 @@ SPECIFIC TOOL ROUTING:
       };
     }
     if (/\b(depth\s*profile|profile.*depth|param.*depth)\b/i.test(q)) {
-      const param = this._extractParam(q);
+      const requestedParams = this._extractRequestedParams(q);
       return {
         tool: "visualize_depth_profile",
-        params: { platform: platform || "", param },
+        params: {
+          platform: platform || "",
+          ...(requestedParams.length > 1
+            ? { params: requestedParams }
+            : { param: requestedParams[0] }),
+        },
         llmConnected: false,
         llmReasoning: "",
       };
@@ -425,7 +447,7 @@ SPECIFIC TOOL ROUTING:
         llmReasoning: "",
       };
     }
-    if (/\b(map|show.*float|where.*float|location)\b/i.test(q)) {
+    if (/\b(map|location|where\s+(?:is|are))\b/i.test(q)) {
       return {
         tool: "visualize_float_map",
         params: region || {},
@@ -456,13 +478,30 @@ SPECIFIC TOOL ROUTING:
       };
     }
     if (/\b(table|list|tabular|grid|all\s*float)\b/i.test(q)) {
+      if (platform) {
+        return {
+          tool: "get_float_profiles",
+          params: {
+            platform,
+            ...(cycle != null ? { cycle } : {}),
+          },
+          llmConnected: false,
+          llmReasoning: "",
+        };
+      }
+      if (/\b(recent|latest|newest)\b/i.test(q)) {
+        return {
+          tool: "get_recent_profiles",
+          params: {},
+          llmConnected: false,
+          llmReasoning: "",
+        };
+      }
       return {
-        tool: "get_data_table",
-        params: platform
-          ? { platform }
-          : dateRange
-            ? { ...dateRange, ...(bbox || {}), param: this._extractParam(q) }
-            : {},
+        tool: dateRange ? "search_profiles" : "get_dataset_metadata",
+        params: dateRange
+          ? { ...dateRange, ...(bbox || {}), param: this._extractParam(q) }
+          : {},
         llmConnected: false,
         llmReasoning: "",
       };
@@ -911,16 +950,34 @@ RESPONSE GUIDELINES:
 
   _toolNeedsPlatform(tool) {
     return [
-      "query_float",
-      "get_float_info",
+      "get_float_profiles",
       "get_metadata_card",
       "visualize_trajectory",
       "visualize_heatmap",
       "visualize_time_series",
       "visualize_depth_profile",
+      "visualize_multi_panel",
       "visualize_ts_diagram",
       "get_stats_card",
     ].includes(tool);
+  }
+
+  _toolAcceptsCycle(tool) {
+    return ["get_float_profiles"].includes(tool);
+  }
+
+  _extractPlatform(q) {
+    const platformMatch = String(q || "").match(
+      /(?:float|platform|wmo|id)\s*#?\s*(\d{5,8})|(?:^|\s)(\d{7,8})(?:\s|$)/i,
+    );
+    return platformMatch ? platformMatch[1] || platformMatch[2] : null;
+  }
+
+  _extractCycle(q) {
+    const cycleMatch = String(q || "").match(
+      /\bcycle(?:\s*number)?\s*#?\s*(\d{1,4})\b/i,
+    );
+    return cycleMatch ? parseInt(cycleMatch[1], 10) : null;
   }
 
   _extractParam(q) {
@@ -931,6 +988,34 @@ RESPONSE GUIDELINES:
     if (/\bnitrate\b/i.test(q)) return "NITRATE";
     if (/\bpress(ure)?\b|pres\b/i.test(q)) return "PRES";
     return "TEMP";
+  }
+
+  _extractRequestedParams(q) {
+    const requested = [];
+    const add = (param) => {
+      if (!requested.includes(param)) requested.push(param);
+    };
+
+    if (/\btemp(erature)?\b/i.test(q)) add("TEMP");
+    if (/\bsal(inity)?\b|psal/i.test(q)) add("PSAL");
+    if (/\bboxy(gen)?\b|doxy/i.test(q)) add("DOXY");
+    if (/\bchloro(phyll)?\b|chla/i.test(q)) add("CHLA");
+    if (/\bnitrate\b/i.test(q)) add("NITRATE");
+    if (/\bpress(ure)?\b|pres\b/i.test(q)) add("PRES");
+
+    return requested.length ? requested : [this._extractParam(q)];
+  }
+
+  _queryRequestsVisualization(query) {
+    return /\b(plot|chart|graph|visuali[sz]e|heatmap|t-?s\s*diagram|time\s*series|track|trajectory|path|depth\s*profile)\b/i.test(
+      String(query || ""),
+    );
+  }
+
+  _queryRequestsProfileRecords(query) {
+    return /\b(profile\s*data|profile\s*details?|profile\s*record|list\s*profiles?|show\s*profiles?|cycle\s*\d+|cycles?)\b/i.test(
+      String(query || ""),
+    );
   }
 
   _extractRegion(q) {
@@ -1295,8 +1380,64 @@ RESPONSE GUIDELINES:
   _normalizeIntent(query, intent) {
     const fallbackIntent = this._keywordFallbackIntent(query);
     if (!intent) return fallbackIntent;
+    const aliasMap = {
+      query_float: "get_float_profiles",
+      get_nearest_floats: "nearest_floats",
+      profiles_by_date: "search_profiles",
+      get_float_info: "get_metadata_card",
+      plot_profiles: "visualize_depth_profile",
+      compare_profiles_depth: "visualize_depth_profile",
+      visualize_profile_depth_plot: "visualize_depth_profile",
+      plot_profiles_by_date: "visualize_profiles_by_date",
+      depth_time_plot: "visualize_time_series",
+      trajectory_map: "visualize_trajectory",
+      visualize_float_trajectory: "visualize_trajectory",
+      map_marker_display: "visualize_float_map",
+    };
+
+    if (aliasMap[intent.tool]) {
+      intent = { ...intent, tool: aliasMap[intent.tool] };
+    }
+
+    const extractedPlatform = this._extractPlatform(query);
+    const extractedCycle = this._extractCycle(query);
+    const extractedParams = this._extractRequestedParams(query);
+
+    if (extractedPlatform && this._toolNeedsPlatform(intent.tool)) {
+      intent.params = { ...(intent.params || {}), platform: extractedPlatform };
+    }
+
+    if (extractedCycle != null && this._toolAcceptsCycle(intent.tool)) {
+      intent.params = { ...(intent.params || {}), cycle: extractedCycle };
+    }
+
+    if (intent.tool === "visualize_depth_profile") {
+      const baseParams = { ...(intent.params || {}) };
+      if (extractedParams.length > 1) {
+        delete baseParams.param;
+        intent.params = { ...baseParams, params: extractedParams };
+      } else {
+        delete baseParams.params;
+        intent.params = { ...baseParams, param: extractedParams[0] };
+      }
+    } else if (
+      extractedParams.length === 1 &&
+      !intent?.params?.param &&
+      ["search_profiles", "visualize_profiles_by_date", "visualize_time_series", "visualize_heatmap", "get_stats_card"].includes(intent.tool)
+    ) {
+      intent.params = { ...(intent.params || {}), param: extractedParams[0] };
+    }
 
     if (intent.tool === "generic_chat" && fallbackIntent.tool !== "generic_chat") {
+      return fallbackIntent;
+    }
+
+    if (
+      fallbackIntent.tool === "get_float_profiles" &&
+      this._queryRequestsProfileRecords(query) &&
+      !this._queryRequestsVisualization(query) &&
+      intent.tool !== "get_float_profiles"
+    ) {
       return fallbackIntent;
     }
 

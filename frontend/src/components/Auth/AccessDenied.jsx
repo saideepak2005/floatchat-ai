@@ -53,7 +53,7 @@ const AccessDenied = () => {
 
             <div className="flex items-center justify-center space-x-2 text-sm text-gray-600">
               <AlertTriangle className="w-4 h-4" />
-              <span>Chat interface requires Researcher or Admin role</span>
+              <span>Chat interface requires researcher access</span>
             </div>
           </div>
         )}
@@ -61,27 +61,15 @@ const AccessDenied = () => {
         {/* Access Requirements */}
         <div className="glass-effect rounded-xl p-6 mb-8">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            Required Access Levels
+            Required Access
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="flex items-center space-x-3 p-3 bg-green-50 rounded-lg">
-              <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                <MessageSquare className="w-4 h-4 text-green-600" />
-              </div>
-              <div className="text-left">
-                <p className="font-medium text-gray-900">Chat Interface</p>
-                <p className="text-sm text-gray-600">Researcher or Admin</p>
-              </div>
+          <div className="flex items-center space-x-3 p-3 bg-green-50 rounded-lg">
+            <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
+              <MessageSquare className="w-4 h-4 text-green-600" />
             </div>
-
-            <div className="flex items-center space-x-3 p-3 bg-blue-50 rounded-lg">
-              <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                <Shield className="w-4 h-4 text-blue-600" />
-              </div>
-              <div className="text-left">
-                <p className="font-medium text-gray-900">Admin Features</p>
-                <p className="text-sm text-gray-600">Admin only</p>
-              </div>
+            <div className="text-left">
+              <p className="font-medium text-gray-900">Chat Interface</p>
+              <p className="text-sm text-gray-600">Researcher</p>
             </div>
           </div>
         </div>
@@ -122,14 +110,11 @@ const AccessDenied = () => {
         {/* Demo Info */}
         <div className="mt-8 p-4 bg-ocean-50 rounded-lg">
           <h4 className="text-sm font-medium text-ocean-800 mb-2">
-            Demo Accounts:
+            Demo Account:
           </h4>
           <div className="text-xs text-ocean-700 space-y-1">
             <p>
               <strong>Researcher:</strong> researcher@argo.com / password
-            </p>
-            <p>
-              <strong>Admin:</strong> admin@argo.com / password
             </p>
           </div>
         </div>

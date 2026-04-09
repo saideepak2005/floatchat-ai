@@ -29,8 +29,8 @@ export default function Navbar({ activeTab, setActiveTab, isMobileMenuOpen, setI
   const appLinks = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, path: "/dashboard" },
     { id: "data-explorer", label: "Data Explorer", icon: Map, path: "/data-explorer" },
-    ...(user?.role === "researcher" || user?.role === "admin" 
-      ? [{ id: "chat", label: "FloatChat AI", icon: MessageSquare, path: "/chat" }] 
+    ...(user?.role === "researcher"
+      ? [{ id: "chat", label: "Chat", icon: MessageSquare, path: "/chat" }] 
       : []),
   ];
 

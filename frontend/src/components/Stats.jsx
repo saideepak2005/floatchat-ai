@@ -45,8 +45,13 @@ function AnimatedCounter({ target, suffix = "", duration = 2 }) {
 
 /* -------------------- Stats Data -------------------- */
 const stats = [
-  { icon: Anchor, label: "Active ARGO Floats", type: "counter", value: 2847 },
-  { icon: BarChart3, label: "Data Points", type: "text", display: "2.1M+" },
+  {
+    icon: Anchor,
+    label: "Active ARGO Floats",
+    type: "counter",
+    value: 567,
+  },
+  { icon: BarChart3, label: "Data Points", type: "text", display: "1L+" },
   {
     icon: Globe2,
     label: "Ocean Coverage",

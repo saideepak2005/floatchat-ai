@@ -32,7 +32,7 @@ const categories = [
     title: "AI & Analytics",
     desc: "Local embeddings, Vector search, and LLM orchestration.",
     items: [
-      "Ollama (Mistral/Qwen)",
+      "Qwen3.5-397b-a17b",
       "ChromaDB Vector Store",
       "LangChain + FastMCP",
     ],
